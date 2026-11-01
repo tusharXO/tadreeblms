@@ -10,7 +10,7 @@ const view = readFileSync(join(__dirname,
 
 function saveRequest(hasCourse) {
     // Execute the real save function, replacing only its server-rendered values.
-    const start = view.indexOf('function sendData(data) {');
+    const start = view.indexOf('function sendData(');
     const end = view.indexOf("$(document).on('change', '#question_type'", start);
     assert.ok(start >= 0 && end > start, 'The feedback save function is available');
     const script = view.slice(start, end)
@@ -27,6 +27,7 @@ function saveRequest(hasCourse) {
     const notifications = [];
     const redirects = [];
     const alerts = [];
+    const validationErrors = [];
     let request;
     let dismissNotification;
     const notificationClosed = new Promise(resolve => { dismissNotification = resolve; });
@@ -38,12 +39,14 @@ function saveRequest(hasCourse) {
         Swal: { fire: options => { notifications.push(options); return notificationClosed; } },
         window: { location: { replace: url => redirects.push(url) } },
         alert: message => alerts.push(message),
+        renderServerValidationErrors: errors => validationErrors.push(errors),
     });
 
     assert.ok(request, 'Submitting the form starts the AJAX request');
+    assert.equal(request.dataType, 'json', 'jQuery parses the response before invoking success');
     assert.equal(notifications.length, 0, 'Success is not shown before the response');
     assert.deepEqual(redirects, []);
-    return { request, notifications, redirects, alerts, dismissNotification };
+    return { request, notifications, redirects, alerts, validationErrors, dismissNotification };
 }
 
 for (const hasCourse of [false, true]) {
@@ -51,7 +54,7 @@ for (const hasCourse of [false, true]) {
 
     test(`creating a question ${context} shows success before redirecting`, async () => {
         const result = saveRequest(hasCourse);
-        result.request.success(JSON.stringify({ code: 200, message: 'Question Inserted' }));
+        result.request.success({ code: 200, message: 'Question Inserted' });
 
         assert.equal(result.notifications.length, 1);
         const notification = result.notifications[0];
@@ -73,11 +76,21 @@ for (const hasCourse of [false, true]) {
 
     test(`a rejected save ${context} preserves the error alert without success`, () => {
         const result = saveRequest(hasCourse);
-        result.request.success(JSON.stringify({ code: 422, message: 'Save failed' }));
+        result.request.success({ code: 422, message: 'Save failed' });
 
         assert.deepEqual(result.alerts, ['Save failed']);
         assert.equal(result.notifications.length, 0);
         assert.deepEqual(result.redirects, []);
     });
 
+    test(`server validation ${context} shows field errors without success`, () => {
+        const result = saveRequest(hasCourse);
+        const errors = { question: ['The question field is required.'] };
+        result.request.error({ status: 422, responseJSON: { errors } });
+
+        assert.deepEqual(result.validationErrors, [errors]);
+        assert.deepEqual(result.alerts, []);
+        assert.equal(result.notifications.length, 0);
+        assert.deepEqual(result.redirects, []);
+    });
 }
